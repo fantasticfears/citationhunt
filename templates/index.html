@@ -39,7 +39,7 @@
     <p id="preamble"><span id="page-title-text">{{ config.strings.in_page % (article_url, article_title) }}</span></p>
     {# use a list for snippet_html to make sure we can access it outside the loop; see https://stackoverflow.com/questions/4870346 #}
     {% set cn_html = cn_html % config.citation_needed_template_name | replace(' ', '&thinsp;') | safe %}
-    {% set snippet_html = [snippet | replace(cn_marker, cn_html)] %}
+    {% set snippet_html = [snippet | replace(cn_marker, cn_html) | replace(br_marker, br_html)] %}
     {% for i in range(1, snippet_html[-1].count(ref_marker) + 1) %}
       {% if snippet_html.append(snippet_html[-1] | replace(ref_marker, ref_html % i, 1)) %}{% endif %}
     {% endfor %}

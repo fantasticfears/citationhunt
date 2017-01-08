@@ -3,7 +3,9 @@ import config
 from utils import *
 from common import *
 
-from snippet_parser import CITATION_NEEDED_MARKER, REF_MARKER
+from snippet_parser import (
+    CITATION_NEEDED_MARKER, REF_MARKER, BR_MARKER
+)
 
 import collections
 import datetime
@@ -180,6 +182,8 @@ def citation_hunt(lang_code):
             next_snippet_id = next_snippet_id,
             cn_marker = CITATION_NEEDED_MARKER,
             cn_html = CITATION_NEEDED_MARKUP,
+            br_marker = BR_MARKER,
+            br_html = flask.Markup('<br/>'),
             ref_marker = REF_MARKER,
             ref_html = SUPERSCRIPT_MARKUP,
             config = cfg,

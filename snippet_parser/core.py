@@ -23,6 +23,7 @@ import lxml.cssselect
 
 REF_MARKER = 'ec5b89dc49c433a9521a139'
 CITATION_NEEDED_MARKER = '7b94863f3091b449e6ab04d4'
+BR_MARKER = '5f743e70c6d247cc7a6503'
 
 STRIP_REGEXP = re.compile( # strip spaces before the markers
     '\s+(' + CITATION_NEEDED_MARKER + '|' + REF_MARKER + ')')
@@ -227,10 +228,8 @@ class SnippetParserBase(object):
         for i, section in enumerate(sections):
             assert i == 0 or \
                 isinstance(section.get(0), mwparserfromhell.nodes.heading.Heading)
-            sectitle = unicode(section.get(0).title.strip()) if i != 0 else ''
-            secsnippets = []
-            snippets.append([sectitle, secsnippets])
 
+            possible_snippets = []
             paragraphs = section.split('\n\n')
             for paragraph in paragraphs:
                 # Invoking a string method on a Wikicode object returns a string,
@@ -239,12 +238,17 @@ class SnippetParserBase(object):
                 if self._has_blacklisted_tag_or_template(wikicode):
                     continue
 
-                snippet = self._cleanup_snippet_text(self._strip_code(wikicode))
-                if not self._cfg.html_snippet and '\n' in snippet:
-                    # Lists cause more 'paragraphs' to be generated
-                    paragraphs.extend(snippet.split('\n'))
-                    continue
+                new_paragraphs = self._split_wikicode_list(wikicode)
+                if new_paragraphs:
+                    possible_snippets.extend(new_paragraphs)
+                else:
+                    possible_snippets.append(wikicode)
 
+            sectitle = unicode(section.get(0).title.strip()) if i != 0 else ''
+            secsnippets = []
+            snippets.append([sectitle, secsnippets])
+            for wikicode in possible_snippets:
+                snippet = self._cleanup_snippet_text(self._strip_code(wikicode))
                 if CITATION_NEEDED_MARKER not in snippet:
                     # marker may have been inside wiki markup
                     continue
@@ -255,7 +259,9 @@ class SnippetParserBase(object):
                         (len(CITATION_NEEDED_MARKER) *
                             snippet.count(CITATION_NEEDED_MARKER)) -
                         (len(REF_MARKER) *
-                            snippet.count(REF_MARKER)))
+                            snippet.count(REF_MARKER)) -
+                        (len(BR_MARKER) *
+                            snippet.count(BR_MARKER)))
                     if usable_len > maxlen or usable_len < minlen:
                         continue
                 else:
@@ -379,6 +385,92 @@ class SnippetParserBase(object):
         newroot.tag = 'div'
         return d(lxml.html.tostring(
             newroot, encoding = 'utf-8', method = 'html'))
+
+    def _split_wikicode_list(self, wikicode):
+        '''For list items marked with the citation needed template, generate
+        a snippet containing that list item plus a couple of adjacent ones.'''
+
+        br_node = mwparserfromhell.nodes.Text(BR_MARKER)
+        def is_li(node):
+            return getattr(node, 'tag', None) == 'li'
+
+        # mwparserfromhell list tags don't contain their text contents, all we
+        # can work with is a flattened stream of nodes (issue #46). The first
+        # thing we do is group the tags and their contents as a single Wikicode
+        # object, and collect these in a list. To do that, we use the following
+        # state machine:
+        #
+        #   +-------+  <li>   +-------+  not <li>   +-------+
+        #   | start | ------> | level | ----------> | build |
+        #   +-------+         +-------+ <---------  +-------+
+        #    |_____^           |_____^     <li>      |_____^
+        #      not <li>          <li>                  not <li>
+        #
+        # start: drop nodes until the first <li>
+        # level: keep track of successive <li> nodes to count the nesting level
+        # build: consume the remaining nodes within a given list item
+
+        preamble = []
+        lis = []
+        current_li = []
+        state = 'start'
+        for n in wikicode.nodes:
+            if state == 'start':
+                if is_li(n):
+                    state = 'level'
+                    current_li = [n]
+                else:
+                    preamble.append(n)
+            elif state == 'level':
+                assert all(is_li(n) for n in current_li)
+                current_li.append(n)
+                if not is_li(n):
+                    state = 'build'
+            elif state == 'build':
+                assert current_li
+                if is_li(n):
+                    state = 'level'
+                    lis.append(mwparserfromhell.wikicode.Wikicode(current_li))
+                    current_li = [n]
+                else:
+                    current_li.append(n)
+        if state == 'build':
+            assert current_li
+            lis.append(mwparserfromhell.wikicode.Wikicode(current_li))
+
+        # Now split the list items into snippets. Each snippet contains at
+        # least one citation needed template, plus a couple of other list items
+        # for context.
+        snippets = {}  # str(wikicode) -> wikicode, to eliminate duplicates
+        for i, item_wikicode in enumerate(lis):
+            for tpl in item_wikicode.filter_templates():
+                if self.is_citation_needed(tpl):
+                    break
+            else:
+                continue
+            lis_in_snippet = lis[i:i+2]
+
+            # Normalize list levels so we start on a level 1 list. We do all
+            # processing in the Wikicode nodes rather than using a regexp to
+            # keep the Wikicode from being implicitly converted to string.
+            nodes = lis_in_snippet[0].nodes
+            for level in range(1, len(nodes)):
+                if is_li(nodes[level-1]) and not is_li(nodes[level]):
+                    break
+            nodes = []
+            for li in lis_in_snippet:
+                nodes.extend(li.nodes[level-1:])
+                if not self._cfg.html_snippet and li != lis_in_snippet[-1]:
+                    # Line breaks between list items are significant. In HTML
+                    # mode, we let the API handle this, but otherwise we need
+                    # to insert markings.
+                    nodes.append(br_node)
+            if nodes and preamble:
+                nodes = preamble[:] + (
+                    [] if self._cfg.html_snippet else [br_node]) + nodes
+            wikicode = mwparserfromhell.wikicode.Wikicode(nodes)
+            snippets[unicode(wikicode)] = wikicode
+        return snippets.values()
 
     def _fast_parse(self, wikitext):
         tokenizer = mwparserfromhell.parser.CTokenizer()

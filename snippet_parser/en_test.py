@@ -10,6 +10,8 @@ cfg.snippet_max_size = float('inf')
 snippet_parser = create_snippet_parser(None, cfg)
 extract_snippets = snippet_parser.extract_snippets
 
+import mwparserfromhell as mwp
+
 import unittest
 import functools
 
@@ -18,7 +20,7 @@ def extract_lead_snippets(text):
     assert snippets[0][0] == ''
     return snippets[0][1]
 
-class ExtractSnippetTest(unittest.TestCase):
+class ExtractSnippetsTest(unittest.TestCase):
     def test_simple_Citation_needed(self):
         s = 'This needs a citation.'
         self.assertEqual(
@@ -159,10 +161,25 @@ class ExtractSnippetTest(unittest.TestCase):
     def test_list(self):
         s = '\n'.join([
             '*[[2002 in comics|2002]]: Nominated for the "Best New Talent" [[National Comics Awards#Best New Talent|National Comics Award]]{{citation needed|date=November 2012}}',
+            '*[[2004 in comics|2004]]: Nominated for the "Best New Talent" [[National Comics Awards#Best New Talent|National Comics Award]]',
             '*[[2007 in comics|2007]]: Nominated the "Favorite Newcomer Writer" [[Eagle Awards#2007|Eagle Award]]{{citation needed|date=November 2012}}'
+            '*[[2008 in comics|2008]]: Nominated the "Favorite Newcomer Writer" [[Eagle Awards#2007|Eagle Award]]'
         ])
-        # Should break each list item into one paragraph
-        self.assertEqual(len(extract_lead_snippets(s)), 2)
+        snippets = sorted(extract_lead_snippets(s))
+        self.assertEqual(len(snippets), 2)
+
+        # First snippet should have the 2004 entriy as context, but not 2007
+        # and 2008
+        self.assertTrue('2002' in snippets[0])
+        self.assertTrue('2004' in snippets[0])
+        self.assertTrue('2007' not in snippets[0])
+        self.assertTrue('2008' not in snippets[0])
+
+        # Second snippet should have the 2004 and 2008 entries as context
+        self.assertTrue('2002' not in snippets[1])
+        self.assertTrue('2004' in snippets[1])
+        self.assertTrue('2007' in snippets[1])
+        self.assertTrue('2008' in snippets[1])
 
     def test_dt(self):
         s = ';The breadth of [[commonsense knowledge]]: The number of atomic facts that the average person knows is astronomical.{{citation needed}}'
@@ -175,6 +192,62 @@ class ExtractSnippetTest(unittest.TestCase):
         self.assertEqual(
             extract_lead_snippets(s),
             ['BC is a province in Canada' + CITATION_NEEDED_MARKER])
+
+    def test_paragraph_space(self):
+        s = 'a{{cn}}\n \nb{{cn}}'
+        self.assertEqual(
+            len(extract_lead_snippets(s)), 2)
+
+# Sometimes it's just easier to test private methods of the base snippet parser
+# than it is to test the full snippet extraction...
+class SnippetParserBaseTest(unittest.TestCase):
+    def test_split_nested_list(self):
+        snippets = snippet_parser._split_wikicode_list(mwp.parse(
+            '* Top-level list item 1\n'
+            '** Nested list item 1{{cn}}\n'
+            '** Nested list item 2\n'
+            '* Top-level list item 2\n'))
+        self.assertEqual(snippets[0], BR_MARKER.join([
+            '* Top-level list item 1\n',
+            '** Nested list item 1{{cn}}\n',
+            '** Nested list item 2\n',
+        ]))
+
+    def test_split_nested_more_levels(self):
+        snippets = snippet_parser._split_wikicode_list(mwp.parse(
+            '** Top-level list item 1\n'
+            '*** Nested list item 1{{cn}}\n'))
+        self.assertEqual(snippets[0], BR_MARKER.join([
+            '* Top-level list item 1\n',
+            '** Nested list item 1{{cn}}\n'
+        ]))
+
+    def test_split_multiple_equivalent_snippets(self):
+        snippets = snippet_parser._split_wikicode_list(mwp.parse(
+            '* list item 1{{cn}}\n'
+            '* list item 2{{cn}}\n'))
+        self.assertEqual(snippets, [
+            BR_MARKER.join([
+                '* list item 1{{cn}}\n',
+                '* list item 2{{cn}}\n'
+            ]),
+        ])
+
+    def test_preamble_same_paragraph(self):
+        snippets = snippet_parser._split_wikicode_list(mwp.parse(
+            'The list of things spans the following elements:\n'
+            '* list item 1\n'
+            '* list item 2\n'
+            '* list item 3\n'
+            '* list item 4{{cn}}\n'
+        ))
+        self.assertEqual(snippets, [
+            BR_MARKER.join([
+                'The list of things spans the following elements:\n',
+                '* list item 3\n',
+                '* list item 4{{cn}}\n'
+            ])
+        ])
 
 if __name__ == '__main__':
     unittest.main()
