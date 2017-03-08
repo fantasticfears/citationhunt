@@ -54,6 +54,7 @@ _BASE_LANG_CONFIG = dict(
         '.noexcerpt',
         '.noprint',
         '.references',
+        'gallery',
         'table',
     ],
 
